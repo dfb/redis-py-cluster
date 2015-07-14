@@ -4,7 +4,8 @@
 from __future__ import with_statement
 
 # rediscluster imports
-from rediscluster.exceptions import RedisClusterException, ClusterDownException
+from rediscluster.connection import ClusterParser
+from rediscluster.exceptions import RedisClusterException
 from rediscluster.utils import (
     string_keys_to_dict,
     dict_merge,
@@ -62,8 +63,8 @@ def test_first_key():
 def test_clusterdown_wrapper():
     @clusterdown_wrapper
     def bad_func():
-        raise ClusterDownException()
+        raise ClusterParser.ClusterDownError("CLUSTERDOWN")
 
-    with pytest.raises(ClusterDownException) as cex:
+    with pytest.raises(ClusterParser.ClusterDownError) as cex:
         bad_func()
     assert unicode(cex.value).startswith("CLUSTERDOWN error. Unable to rebuild the cluster")

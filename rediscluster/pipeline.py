@@ -8,8 +8,8 @@ import threading
 
 # rediscluster imports
 from .client import StrictRedisCluster
-from .connection import by_node_context
-from .exceptions import RedisClusterException, ClusterDownException
+from .connection import by_node_context, ClusterParser
+from .exceptions import RedisClusterException
 from .utils import clusterdown_wrapper
 
 # 3rd party imports
@@ -193,30 +193,23 @@ class StrictClusterPipeline(StrictRedisCluster):
                         time.sleep(0.1)
                     continue
 
-                errv = StrictRedisCluster._exception_message(v)
-                if errv is None:
-                    continue
-
-                if errv.startswith('CLUSTERDOWN'):
+                # If cluster is down it should be raised and bubble up to
+                # utils.clusterdown_wrapper()
+                if isinstance(v, ClusterParser.ClusterDownError):
                     self.connection_pool.disconnect()
                     self.connection_pool.reset()
                     self.refresh_table_asap = True
-                    raise ClusterDownException()
+                    raise v
 
-                redir = self.parse_redirection_exception_msg(errv)
-
-                if not redir:
-                    continue
-
-                if redir['action'] == "MOVED":
+                if isinstance(v, ClusterParser.MovedError):
                     self.refresh_table_asap = True
-                    node = self.connection_pool.nodes.set_node(redir['host'], redir['port'], server_type='master')
-                    self.connection_pool.nodes.slots[redir['slot']] = node
+                    node = self.connection_pool.nodes.set_node(v.host, v.port, server_type='master')
+                    self.connection_pool.nodes.slots[v.slot_id] = node
                     attempt.append(i)
                     self._fail_on_redirect(allow_redirections)
-                elif redir['action'] == "ASK":
-                    node = self.connection_pool.nodes.set_node(redir['host'], redir['port'], server_type='master')
-                    ask_slots[redir['slot']] = node
+                elif isinstance(v, ClusterParser.AskError):
+                    node = self.connection_pool.nodes.set_node(v.host, v.port, server_type='master')
+                    ask_slots[v.slot_id] = node
                     attempt.append(i)
                     self._fail_on_redirect(allow_redirections)
 

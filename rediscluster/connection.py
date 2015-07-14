@@ -11,12 +11,68 @@ from .nodemanager import NodeManager
 from .exceptions import RedisClusterException
 
 # 3rd party imports
-from redis.connection import ConnectionPool, Connection
+from redis.client import dict_merge
+from redis.connection import ConnectionPool, Connection, DefaultParser
+from redis.exceptions import (
+    ResponseError, RedisError,
+)
+
+
+class ClusterParser(DefaultParser):
+    class ClusterError(RedisError):
+        pass
+
+    class ClusterCrossSlotError(ResponseError):
+        message = "Keys in request don't hash to the same slot"
+
+    class ClusterDownError(ClusterError, ResponseError):
+        def __init__(self, resp):
+            self.args = (resp, )
+            self.message = resp
+
+    class AskError(ResponseError):
+        """
+        src node: MIGRATING to dst node
+            get > ASK error
+            ask dst node > ASKING command
+        dst node: IMPORTING from src node
+            asking command only affects next command
+            any op will be allowed after asking command
+        """
+
+        def __init__(self, resp):
+            """should only redirect to master node"""
+            self.args = (resp, )
+            self.message = resp
+            _, slot_id, new_node = resp.split(' ')
+            host, port = new_node.rsplit(':', 1)
+            self.slot_id = int(slot_id)
+            self.node_addr = self.host, self.port = host, int(port)
+
+    class TryAgainError(ResponseError):
+        def __init__(self, resp):
+            pass
+
+    class MovedError(AskError):
+        pass
+
+    EXCEPTION_CLASSES = dict_merge(
+        DefaultParser.EXCEPTION_CLASSES, {
+            'ASK': AskError,
+            'TRYAGAIN': TryAgainError,
+            'MOVED': MovedError,
+            'CLUSTERDOWN': ClusterDownError,
+            'CROSSSLOT': ClusterCrossSlotError,
+        })
 
 
 class ClusterConnection(Connection):
     "Manages TCP communication to and from a Redis server"
     description_format = "ClusterConnection<host=%(host)s,port=%(port)s>"
+
+    def __init__(self, *args, **kwargs):
+        kwargs['parser_class'] = ClusterParser
+        super(ClusterConnection, self).__init__(*args, **kwargs)
 
 
 class UnixDomainSocketConnection(Connection):

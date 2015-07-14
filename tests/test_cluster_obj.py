@@ -6,17 +6,15 @@ import re
 
 # rediscluster imports
 from rediscluster import StrictRedisCluster
-from rediscluster.connection import ClusterConnectionPool
+from rediscluster.connection import ClusterConnectionPool, ClusterParser
 from rediscluster.exceptions import RedisClusterException
 from rediscluster.nodemanager import NodeManager
 from tests.conftest import _get_client, skip_if_server_version_lt
 
 # 3rd party imports
 from mock import patch, Mock
-from redis.exceptions import ResponseError
 from redis._compat import unicode
 import pytest
-
 
 pytestmark = skip_if_server_version_lt('2.9.0')
 
@@ -104,10 +102,7 @@ def test_cluster_of_one_instance():
                     return "OK"
                 parse_response_mock.side_effect = ok_call
 
-                resp = ResponseError()
-                resp.args = ('CLUSTERDOWN The cluster is down. Use CLUSTER INFO for more information',)
-                resp.message = 'CLUSTERDOWN The cluster is down. Use CLUSTER INFO for more information'
-                raise resp
+                raise ClusterParser.ClusterDownError('CLUSTERDOWN The cluster is down. Use CLUSTER INFO for more information')
 
             def side_effect_rebuild_slots_cache(self):
                 # make new node cache that points to 7007 instead of 7006
@@ -154,66 +149,6 @@ def test_cluster_of_one_instance():
             p = rc.pipeline()
             p.set("bar", "foo")
             p.execute()
-
-
-def test_moved_exception_handling(r):
-    """
-    Test that `handle_cluster_command_exception` deals with MOVED
-    error correctly.
-    """
-    resp = ResponseError()
-    resp.message = "MOVED 1337 127.0.0.1:7000"
-    r.handle_cluster_command_exception(resp)
-    assert r.refresh_table_asap is True
-    assert r.connection_pool.nodes.slots[1337] == {
-        "host": "127.0.0.1",
-        "port": 7000,
-        "name": "127.0.0.1:7000",
-        "server_type": "master",
-    }
-
-
-def test_ask_exception_handling(r):
-    """
-    Test that `handle_cluster_command_exception` deals with ASK
-    error correctly.
-    """
-    resp = ResponseError()
-    resp.message = "ASK 1337 127.0.0.1:7000"
-    assert r.handle_cluster_command_exception(resp) == {
-        "name": "127.0.0.1:7000",
-        "method": "ask",
-    }
-
-
-def test_raise_regular_exception(r):
-    """
-    If a non redis server exception is passed in it shold be
-    raised again.
-    """
-    e = Exception("foobar")
-    with pytest.raises(Exception) as ex:
-        r.handle_cluster_command_exception(e)
-    assert unicode(ex.value).startswith("foobar")
-
-
-def test_clusterdown_exception_handling():
-    """
-    Test that if exception message starts with CLUSTERDOWN it should
-    disconnect the connection pool and set refresh_table_asap to True.
-    """
-    with patch.object(ClusterConnectionPool, 'disconnect') as mock_disconnect:
-        with patch.object(ClusterConnectionPool, 'reset') as mock_reset:
-            r = StrictRedisCluster(host="127.0.0.1", port=7000)
-            i = len(mock_reset.mock_calls)
-
-            assert r.handle_cluster_command_exception(Exception("CLUSTERDOWN")) == {"method": "clusterdown"}
-            assert r.refresh_table_asap is True
-
-            mock_disconnect.assert_called_once_with()
-
-            # reset() should only be called once inside `handle_cluster_command_exception`
-            assert len(mock_reset.mock_calls) - i == 1
 
 
 def test_execute_command_errors(r):
@@ -274,9 +209,7 @@ def test_ask_redirection():
 
             return "MOCK_OK"
         m.side_effect = ok_response
-        resp = ResponseError()
-        resp.message = "ASK 1337 127.0.0.1:7001"
-        raise resp
+        raise ClusterParser.AskError("ASK 1337 127.0.0.1:7001")
 
     m.side_effect = ask_redirect_effect
 
@@ -284,7 +217,7 @@ def test_ask_redirection():
     assert r.execute_command("SET", "foo", "bar") == "MOCK_OK"
 
 
-def test_ask_redirection_pipeline():
+def test_pipeline_ask_redirection():
     """
     Test that the server handles ASK response when used in pipeline.
 
@@ -305,9 +238,7 @@ def test_ask_redirection_pipeline():
 
             return "MOCK_OK"
         m.side_effect = ok_response
-        resp = ResponseError()
-        resp.message = "ASK 12182 127.0.0.1:7001"
-        raise resp
+        raise ClusterParser.AskError("ASK 12182 127.0.0.1:7001")
 
     m.side_effect = ask_redirect_effect
 
@@ -335,9 +266,7 @@ def test_moved_redirection():
 
             return "MOCK_OK"
         m.side_effect = ok_response
-        resp = ResponseError()
-        resp.message = "MOVED 12182 127.0.0.1:7002"
-        raise resp
+        raise ClusterParser.MovedError("MOVED 12182 127.0.0.1:7002")
 
     m.side_effect = ask_redirect_effect
 
@@ -366,9 +295,7 @@ def test_moved_redirection_pipeline():
 
             return "MOCK_OK"
         m.side_effect = ok_response
-        resp = ResponseError()
-        resp.message = "MOVED 12182 127.0.0.1:7002"
-        raise resp
+        raise ClusterParser.MovedError("MOVED 12182 127.0.0.1:7002")
 
     m.side_effect = moved_redirect_effect
 
