@@ -247,14 +247,15 @@ class StrictRedisCluster(StrictRedis):
                 self.connection_pool.nodes.slots[e.slot_id] = node
                 redirect_addr = "%s:%s" % (e.host, e.port)
             except ClusterParser.TryAgainError as e:
-                print("TODO: TRY AGAIN ERROR...")
+                if ttl < self.COMMAND_TTL / 2:
+                    time.sleep(0.05)
             except ClusterParser.AskError as e:
                 node = self.connection_pool.nodes.set_node(e.host, e.port, server_type='master')
                 redirect_addr, asking = "%s:%s" % (e.host, e.port), True
             finally:
                 self.connection_pool.release(r)
 
-        raise RedisClusterException("Too many Cluster redirections")
+        raise ClusterParser.ClusterError('TTL exhausted.')
 
     def _execute_command_on_nodes(self, nodes, *args, **kwargs):
         command = args[0]
