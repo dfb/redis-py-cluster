@@ -67,7 +67,9 @@ class NodeManager(object):
         return self.nodes[key]
 
     def get_redis_link(self, host, port, decode_responses=False):
-        return StrictRedis(host=host, port=port, decode_responses=decode_responses, **self.connection_kwargs)
+        args = self.connection_kwargs.copy()
+        args.update(host=host, port=port, decode_responses=decode_responses)
+        return StrictRedis(**args)
 
     def initialize(self):
         """
